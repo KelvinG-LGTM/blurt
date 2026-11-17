@@ -1,11 +1,12 @@
 import { STATES, targetOf, type Action } from "@blurt/ui";
 import { KindIcon } from "@blurt/ui/react";
-import { useEffect, useRef, useState } from "react";
-import type { Item } from "../host";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { Item, QATurn } from "../host";
+import { isEnter } from "../ime";
 import { kindOf, SEV, type StateFilter } from "../store";
 import { Icon } from "./Icon";
 import { Thinking } from "./TopBar";
-import { cx, mdLite, useStore } from "./ctx";
+import { cx, mdLite, mdTimes, useStore } from "./ctx";
 import { StateControl, StateRing, stateText } from "./Queue";
 
 export function ListView() {
@@ -255,10 +256,154 @@ function DropZone() {
   );
 }
 
+type OnTime = (t: number, from: HTMLElement) => void;
+
+/** The summary's or an answer's markdown. With `onTime` (the page has the recording's video) each [mm:ss] is a
+    button that opens the recording at that moment. */
+function Md({ src, onTime }: { src: string; onTime?: OnTime }) {
+  const s = useStore();
+  const html = onTime ? mdTimes(mdLite(src), s.t("ask.time", { t: "{t}" })) : mdLite(src);
+  // one object while the text is the same: React sets innerHTML again for every new object, which would replace
+  // the time that was just clicked (and drop a selection or the focus) on each render
+  const inner = useMemo(() => ({ __html: html }), [html]);
+  return (
+    <div
+      className="md"
+      dangerouslySetInnerHTML={inner}
+      onClick={(e) => {
+        const b = (e.target as HTMLElement).closest?.("button.ts") as HTMLElement | null;
+        if (b && onTime) onTime(Number(b.dataset.t), b);
+      }}
+    />
+  );
+}
+
+/** The recording, opened at a moment a summary or an answer points to: a bar docked at the bottom of the Overview. */
+function Moment({ at, n, onClose }: { at: number; n: number; onClose: () => void }) {
+  const s = useStore();
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const go = () => {
+      v.currentTime = at;
+      void v.play()?.catch(() => {});
+    };
+    if (v.readyState >= 1) go();
+    else v.addEventListener("loadedmetadata", go, { once: true });
+    return () => v.removeEventListener("loadedmetadata", go);
+  }, [at, n]);
+  return (
+    <div className="ov-moment" id="ovMoment">
+      <video ref={ref} src={s.host.fileUrl(String(s.data.source_video))} controls playsInline preload="metadata" />
+      <button className="btn sm ghost" id="ovMomentClose" aria-label={s.t("action.close")} title={s.t("action.close")} onClick={onClose}>
+        <Icon name="x" />
+      </button>
+    </div>
+  );
+}
+
+/** "Ask about this recording": the questions asked so far with their answers, and the field for the next one. The
+    host has an agent answer from the recording's own files (BlurtHost.ask). One question at a time. */
+function Ask({ onTime }: { onTime?: OnTime }) {
+  const s = useStore();
+  const [q, setQ] = useState("");
+  const turns = s.qa;
+  if (!s.canAsk && !turns.length) return null;
+  const pending = s.askPending != null && !turns.some((t) => t.status === "running");
+  const send = (text: string) => {
+    if (!text.trim() || s.asking) return;
+    void s.ask(text);
+    setQ("");
+  };
+  const why = (t: QATurn) =>
+    t.code === "timeout" || t.code === "interrupted" ? s.t("ask.error." + t.code) : t.error || s.t(t.code === "no_agent" ? "ask.error.no_agent" : "ask.error.unknown");
+  const wait = (
+    <p className="recask-wait" role="status">
+      <Thinking /> {s.t("ask.thinking")}
+    </p>
+  );
+  return (
+    <section className="recask" id="recAsk">
+      <h3>{s.t("ask.title")}</h3>
+      <div className="recask-turns" aria-live="polite">
+        {turns.map((t, n) => (
+          <div key={t.id} className="recask-turn" data-status={t.status}>
+            <p className="recask-q">{t.question}</p>
+            {t.status === "done" ? (
+              <Md src={t.answer || ""} onTime={onTime} />
+            ) : t.status === "running" ? (
+              wait
+            ) : (
+              <p className="recask-err">
+                <span>{why(t)}</span>
+                {s.canAsk && n === turns.length - 1 && (
+                  <button className="btn sm" disabled={s.asking} onClick={() => send(t.question)}>
+                    {s.t("ask.retry")}
+                  </button>
+                )}
+              </p>
+            )}
+          </div>
+        ))}
+        {pending && (
+          <div className="recask-turn" data-status="running">
+            <p className="recask-q">{s.askPending}</p>
+            {wait}
+          </div>
+        )}
+      </div>
+      {s.canAsk && (
+        <div className="recask-form">
+          <input
+            id="askInput"
+            className="recask-input"
+            value={q}
+            maxLength={2000}
+            placeholder={s.t("ask.placeholder")}
+            aria-label={s.t("ask.title")}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (!isEnter(e)) return; // an input method's Enter commits a candidate, it never asks
+              e.preventDefault();
+              send(q);
+            }}
+          />
+          <button id="askSend" className="btn" disabled={!q.trim() || s.asking} onClick={() => send(q)}>
+            {s.t("ask.send")}
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function Overview() {
   const s = useStore();
   const ks: Record<string, Item[]> = {};
   s.data.items.forEach((i) => (ks[kindOf(i)] ||= []).push(i));
+  // a time in the summary or in an answer opens the recording there, while its video is still on disk
+  const [moment, setMoment] = useState<{ at: number; n: number } | null>(null);
+  const clicked = useRef<HTMLElement | null>(null);
+  const hasVideo = s.isSession && s.data._video !== false && !!s.data.source_video;
+  const onTime: OnTime | undefined = hasVideo
+    ? (t, from) => {
+        clicked.current = from;
+        setMoment((m) => ({ at: t, n: (m?.n ?? 0) + 1 }));
+      }
+    : undefined;
+  // the time that was clicked stays in view: the bar never opens over it
+  useEffect(() => {
+    const from = clicked.current;
+    const bar = document.getElementById("ovMoment");
+    const scroller = from?.closest(".scroll");
+    if (!moment || !from || !bar || !scroller) return;
+    // where the bar's top will be: by its height, since a sticky box just added can still report where it would
+    // be unstuck
+    const top = scroller.getBoundingClientRect().bottom - bar.offsetHeight;
+    const over = from.getBoundingClientRect().bottom + 12 - top;
+    if (over > 0) scroller.scrollBy({ top: over });
+  }, [moment]);
   return (
     <main id="overviewView" className="list scroll">
       <article className="ov">
@@ -270,7 +415,8 @@ export function Overview() {
             </span>
           ))}
         </div>
-        {s.data.digest ? <div className="md" dangerouslySetInnerHTML={{ __html: mdLite(String(s.data.digest)) }} /> : null}
+        {s.data.digest ? <Md src={String(s.data.digest)} onTime={onTime} /> : null}
+        <Ask onTime={onTime} />
         {Object.entries(ks).map(([k, v]) => (
           <section key={k}>
             <h3>
@@ -288,6 +434,7 @@ export function Overview() {
           </section>
         ))}
       </article>
+      {moment && hasVideo && <Moment at={moment.at} n={moment.n} onClose={() => setMoment(null)} />}
     </main>
   );
 }

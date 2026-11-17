@@ -532,6 +532,14 @@ extension App {
             emit(["event": "dragdest", "chain": chain])
         case "js":                                      // js CODE: run in the main window's review canvas
             MainWindowController.shared.detail.web?.evaluateJavaScript(arg) { r, e in emit(["event": "js", "result": "\(r ?? e ?? "")"]) }
+        case "websnap":                                 // websnap PATH: the main window's review canvas as a PNG, drawn by
+            // the web view itself (no Screen Recording permission, unlike screencapture)
+            guard let wv = MainWindowController.shared.detail.web else { return emit(["event": "websnap", "ok": false, "path": arg]) }
+            wv.takeSnapshot(with: nil) { img, e in
+                let png = img?.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0) }?.representation(using: .png, properties: [:])
+                let ok = png.map { (try? $0.write(to: URL(fileURLWithPath: arg))) != nil } ?? false
+                emit(["event": "websnap", "ok": ok, "path": arg, "error": e.map { "\($0)" } ?? ""])
+            }
         case "webjs":                                   // webjs CODE: run in every blurt-app:// canvas (main window detail)
             func webViews(_ v: NSView) -> [WKWebView] { (v as? WKWebView).map { [$0] } ?? v.subviews.flatMap(webViews) }
             for w in NSApp.windows { for wv in webViews(w.contentView ?? NSView()) where wv.url?.scheme == "blurt-app" {

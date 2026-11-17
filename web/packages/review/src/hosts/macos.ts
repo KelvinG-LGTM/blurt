@@ -8,7 +8,7 @@
    blurt-app://file/<percent-encoded absolute path> (v3) or blurt-app://session/<rel> (a v2 session). The native side
    describes itself with a document-start user script:
      window.blurtHostInfo = {host: "macos", scope: {project: "3f2a…"}, methods: ["reveal", "handoff", …], accent: "#0a84ff"} */
-import { isAbs, type BlurtHost, type DragRect, type HandoffResult, type LoadResult, type OpsResult, type PollResult, type Scope, type UserOp } from "../host";
+import { isAbs, type AskResult, type BlurtHost, type DragRect, type HandoffResult, type LoadResult, type OpsResult, type PollResult, type Scope, type UserOp } from "../host";
 import { encodeRel } from "./browser";
 
 interface Handler {
@@ -141,5 +141,7 @@ export function createMacosHost(win: W = window as W, timeoutMs = 30000, toastTi
     host.undone = (uid) => notify("undone", { uid });
   }
   if (has.has("focusList")) host.focusList = () => notify("focusList", {});
+  // a recording's page only: a project's list has no one recording to ask about
+  if (has.has("ask") && scope && "session" in scope) host.ask = (question) => call<AskResult>("ask", { question, scope });
   return host;
 }

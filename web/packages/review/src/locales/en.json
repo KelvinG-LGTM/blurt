@@ -275,5 +275,15 @@
   "work.to": "to {who}",
   "work.you": "you",
   "work.line.done": "Marked done by {who} · {when}",
-  "work.line.wontfix": "Marked won’t do by {who} · {when}"
+  "work.line.wontfix": "Marked won’t do by {who} · {when}",
+  "ask.title": "Ask about this recording",
+  "ask.placeholder": "Ask a question about this recording…",
+  "ask.send": "Ask",
+  "ask.thinking": "Reading the recording…",
+  "ask.retry": "Try Again",
+  "ask.time": "Play the recording at {t}",
+  "ask.error.timeout": "This took too long and was stopped.",
+  "ask.error.interrupted": "Blurt quit before the answer was ready.",
+  "ask.error.no_agent": "No agent that can answer is ready. Claude Code answers questions: install it and sign in.",
+  "ask.error.unknown": "Couldn’t get an answer."
 }

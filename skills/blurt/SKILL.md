@@ -120,7 +120,9 @@ when several people's recordings are combined.
 
 `transcribe.py run <session>/recording.mp4` → `transcript.json` + `transcript.txt` (`[mm:ss.s-mm:ss.s] text`).
 Recordings made with Blurt are usually transcribed *while* they record (`live/`): then it returns at once with
-`"live": true` — same text as a whole-file run; `--force` redoes it (e.g. with a `--prompt` glossary). A shots
+`"live": true` — same text as a whole-file run; `--force` redoes it (e.g. with a `--prompt` glossary). Run it even
+when `transcript.txt` is already there: the live transcript has only the microphone, and this run adds the other
+side of a call (below). The Mac app runs it itself before it starts you. A shots
 session (`meta.json` `"mode": "shots"`): `transcribe.py run <session>` turns each voice note into `"said"` in
 `shots.jsonl`.
 Recorded with system audio (`record.py start --system-audio`, or the app's Settings → General toggle — calls, product demos),
@@ -157,8 +159,14 @@ Principles — judgement, not rules:
   sentence: merge revisits, drop retracted remarks, split compounds. Pure narration is not an item.
 - Fix ASR errors from context (repo vocabulary, what's on screen). Keep `quote` close to what was said.
 - Don't invent. When unsure, write your best guess, set `confidence: "low"`, add a short `questions` entry.
-- Give the session a `title`. For idea-heavy or exploratory recordings a `digest` (markdown: themes, the strongest
-  ideas, how they connect, suggested next step) becomes the page's Overview — it can follow in §4.
+- Give the session a `title`, and every recording a `digest`: its summary in markdown. It is the page's Overview and
+  what the user reads first. Sections, in the recording's language, leaving out one that would be empty:
+  `## Summary` (2–4 sentences: what it was, who took part, the outcome), `## Key points and decisions`,
+  `## Action items` (one line each: who, what, `[mm:ss]`), `## Open questions`. Put `[mm:ss]` after a point that
+  comes from one moment. For an idea-heavy or exploratory recording write themes, the strongest ideas, how they
+  connect and a suggested next step instead. A call recorded with system audio has both sides in the transcript
+  (§2): summarise both, and name a speaker only where the recording does. A batch of snaps or voice notes needs no
+  digest. It can follow in §4 (`items.py patch <session> . --set 'digest="…"'`); `ingest` warns while it is missing.
 
 **Which project** (only when the session is in the inbox — no current project — and there are projects): the
 app's prompt lists them; in a chat run `projects.py candidates` (each project's id, key, name, description, folder and

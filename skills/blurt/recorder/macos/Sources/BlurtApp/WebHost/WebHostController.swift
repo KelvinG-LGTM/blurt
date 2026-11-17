@@ -275,7 +275,7 @@ final class WebHostController: NSViewController, WKScriptMessageHandler, WKNavig
     /// The optional host methods we implement.
     var methods: [String] {
         ["reveal", "quickLook", "openCode", "registerDragRects", "download", "dispatch", "handoff",
-         "fileUrl", "toast", "registerUndo", "focusList", "addFiles"]
+         "fileUrl", "toast", "registerUndo", "focusList", "addFiles", "ask"]
     }
 
     // MARK: one undo stack per window
@@ -632,6 +632,12 @@ final class WebHostController: NSViewController, WKScriptMessageHandler, WKNavig
         case "focusList":
             actions?.focusList()
             reply(nil, nil)
+        case "ask":
+            // "Ask about this recording" (the Overview): the turn is in the doc's `qa` as soon as this answers, and
+            // the page is told to fetch again when the answer is in
+            guard case .session(let dir)? = scope(p) else { return reply(nil, "no session") }
+            let r = appDelegate?.ask(dir, question: p["question"] as? String ?? "") { [weak self] in self?.pollNow() }
+            reply(["id": r?.id as Any? ?? NSNull(), "why": r?.why as Any? ?? NSNull()] as [String: Any], nil)
         case "confirmed":
             actions?.webWrote()
             if case .session(let u)? = scope(p) { ReviewHandoff.confirmed(session: u) }

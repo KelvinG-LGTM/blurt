@@ -269,5 +269,15 @@
   "work.to": "交给 {who}",
   "work.you": "你",
   "work.line.done": "{who}标为已完成 · {when}",
-  "work.line.wontfix": "{who}标为不做 · {when}"
+  "work.line.wontfix": "{who}标为不做 · {when}",
+  "ask.title": "问问这段录屏",
+  "ask.placeholder": "就这段录屏提一个问题…",
+  "ask.send": "提问",
+  "ask.thinking": "正在读这段录屏…",
+  "ask.retry": "再试一次",
+  "ask.time": "从 {t} 播放录屏",
+  "ask.error.timeout": "用时太长，已经停止。",
+  "ask.error.interrupted": "答案还没出来，口喷鸡就退出了。",
+  "ask.error.no_agent": "还没有能回答的 Agent。Claude Code 可以回答：安装并登录它。",
+  "ask.error.unknown": "没能得到答案。"
 }

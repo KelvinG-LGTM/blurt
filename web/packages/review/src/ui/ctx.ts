@@ -45,3 +45,14 @@ export function mdLite(src: string): string {
   }
   return out + (inList ? "</ul>" : "");
 }
+
+/** [mm:ss] / [h:mm:ss] in mdLite's output → a button that carries the moment in seconds (data-t): a summary's or an
+    answer's times open the recording there. `label`: its accessible name, with {t} for the time. */
+const TIME = /\[(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\]/g;
+export function mdTimes(html: string, label: string): string {
+  return html.replace(TIME, (_all, h: string | undefined, m: string, s: string) => {
+    const t = Number(h || 0) * 3600 + Number(m) * 60 + Number(s);
+    const text = (h ? h + ":" : "") + m + ":" + s;
+    return `<button type="button" class="ts" data-t="${t}" aria-label="${esc(label.replace("{t}", text))}">${text}</button>`;
+  });
+}

@@ -8,7 +8,7 @@
    state only where that step changed it (UndoEntry.states), so an agent's state written meanwhile is never undone. */
 import { resolveLang, systemLanguages } from "@blurt/i18n";
 import { actionForKey, canDo, isInbox, KINDS, menuCase, migrate, stateOf, targetOf, type Action, type State } from "@blurt/ui";
-import type { BlurtHost, Item, MountOptions, ProjectRef, ReviewDoc, UserOp } from "./host";
+import type { BlurtHost, Item, MountOptions, ProjectRef, QATurn, ReviewDoc, UserOp } from "./host";
 import { fieldLabel, humanizeKey } from "./fields";
 import { makeI18n, SEVERITIES, TYPES, type I18n } from "./i18n";
 import { imeBusy, isEnter } from "./ime";
@@ -135,6 +135,9 @@ export class ReviewStore {
   finishWarn = false;
   modal: null | "help" | "finish" = null;
   toast: { msg: string; undo: boolean; show: boolean; icon?: "check" | "x" | "copy" | "folder" } | null = null;
+  /** "Ask about this recording": the question just sent, shown until the doc has its turn */
+  askPending: string | null = null;
+  private askId: string | null = null;
   lightbox: string | null = null;
   proc: ProcPhase = "hidden";
 
@@ -248,6 +251,43 @@ export class ReviewStore {
   get hasOverview() {
     return !!(this.data.digest || this.data.title);
   }
+  /** the questions asked about this recording, oldest first */
+  get qa(): QATurn[] {
+    return Array.isArray(this.data.qa) ? (this.data.qa as QATurn[]) : [];
+  }
+  /** the host can have an agent answer a question about this recording (the Mac app, on a recording's page) */
+  get canAsk() {
+    return this.mode === "review" && this.isSession && !!this.host.ask;
+  }
+  /** a question is being answered: one at a time */
+  get asking() {
+    return this.askPending != null || this.qa.some((t) => t.status === "running");
+  }
+  /** Ask one question about the recording. The answer arrives in the doc (`qa`) with a later poll. */
+  ask = async (question: string): Promise<boolean> => {
+    const q = question.trim();
+    if (!q || !this.host.ask || this.asking) return false;
+    this.askPending = q;
+    this.askId = null;
+    this.emit();
+    let id: string | null = null;
+    try {
+      id = (await this.host.ask(q))?.id ?? null;
+    } catch {
+      id = null;
+    }
+    if (!id) {
+      this.askPending = null;
+      this.showToast(this.t("ask.error.unknown"), false, "x");
+      this.emit();
+      return false;
+    }
+    this.askId = id;
+    if (this.qa.some((t) => t.id === id)) this.askPending = null; // the doc already has it
+    else this.pollNow();
+    this.emit();
+    return true;
+  };
   /** a session's batch (review / finish) rather than a project's list */
   get isSession() {
     return !this.data.scope || "session" in this.data.scope;
@@ -503,6 +543,13 @@ export class ReviewStore {
     const keys = new Set(this.data.items.map(this.key));
     for (const k of [...this.selected]) if (!keys.has(k)) this.selected.delete(k);
     this.changed = res.changed;
+    // the summary and the questions asked are the agent's and the app's to write, never edited here: they follow the doc
+    const top = this.data as Record<string, unknown>;
+    for (const k of ["title", "digest", "qa"] as const) {
+      if (doc[k] == null) delete top[k];
+      else top[k] = doc[k];
+    }
+    if (this.askId && this.qa.some((t) => t.id === this.askId)) this.askPending = null;
     this.markKnown(true);
     if (prevProc !== !!this.data.processing) this.procChanged();
     this.lastStalled = this.stalled;

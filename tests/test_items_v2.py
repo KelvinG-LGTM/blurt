@@ -126,6 +126,64 @@ class Ingest(Base):
         self.assertEqual((out["items"][0]["id"], out["inbox"]), ("IN-1", 1))
         self.assertEqual(self.item("IN-1")["source"]["type"], "import")
 
+    def test_a_recording_without_a_summary_is_said_at_ingest(self):
+        """Every recording has a summary (SKILL.md §3): ingest tells the agent that just ran it, with the command."""
+        self.assertNotIn("warning", self.ok("ingest", self.s))  # AGENT_JSON has a digest
+        bare = {k: v for k, v in AGENT_JSON.items() if k != "digest"}
+        rec = self.proj / ".blurt" / "sessions" / "20261022-111500"
+        rec.mkdir()
+        (rec / "recording.mp4").write_bytes(b"mp4")
+        (rec / "items.json").write_text(json.dumps(bare))
+        out = self.ok("ingest", rec)
+        self.assertIn("no summary", out["warning"])
+        self.assertIn(f"items.py patch {rec} . --set 'digest=\"## Summary\\n", out["warning"])
+        self.assertEqual(len(out["items"]), 3)  # the items are filed all the same
+        # the command it names writes real line breaks
+        self.ok("patch", rec, ".", "--set", 'digest="## Summary\\nA call."')
+        self.assertEqual(json.loads((rec / "batch.json").read_text())["digest"], "## Summary\nA call.")
+        # a batch of snaps is not a recording: nothing to summarise
+        shots = self.proj / ".blurt" / "sessions" / "20261022-121500-shots"
+        shots.mkdir()
+        (shots / "items.json").write_text(json.dumps({"items": [{"id": "I-001", "kind": "note", "title": "n"}]}))
+        self.assertNotIn("warning", self.ok("ingest", shots))
+
+
+class Ask(Base):
+    """"Ask about this recording": the app writes the turns to <session>/qa.jsonl, the page reads them in its doc."""
+
+    def write(self, *lines):
+        with (self.s / "qa.jsonl").open("a", encoding="utf-8") as f:
+            for line in lines:
+                f.write((line if isinstance(line, str) else json.dumps(line)) + "\n")
+
+    def test_the_doc_carries_the_turns(self):
+        import time
+        self.ok("ingest", self.s)
+        self.assertEqual(self.ok("doc", self.s)["doc"]["qa"], [])
+        now = time.time()
+        self.write({"id": "q-1", "question": "Who owns it?", "status": "running", "at": now},
+                   {"id": "q-2", "question": "When is it due?", "status": "running", "at": now - 4000},
+                   "not json",
+                   {"id": "q-1", "status": "done", "answer": "Amy. [00:42]", "agent": "claude", "done_at": now + 20},
+                   {"id": "q-3", "status": "done", "answer": "a turn with no question"})
+        qa = self.ok("doc", self.s)["doc"]["qa"]
+        self.assertEqual([t["id"] for t in qa], ["q-1", "q-2"])
+        self.assertEqual((qa[0]["status"], qa[0]["question"], qa[0]["answer"], qa[0]["agent"]),
+                         ("done", "Who owns it?", "Amy. [00:42]", "claude"))  # the later line adds to the earlier
+        # a turn the app left running when it quit: failed, so the page never waits for it
+        self.assertEqual((qa[1]["status"], qa[1]["code"]), ("failed", "interrupted"))
+
+    def test_a_new_turn_changes_the_etag_and_a_project_has_none(self):
+        import time
+        self.ok("ingest", self.s)
+        tag = self.ok("doc", self.s)["etag"]
+        self.assertEqual(self.ok("poll", self.s, "--etag", tag), {"ok": True, "etag": tag})
+        self.write({"id": "q-1", "question": "Who owns it?", "status": "running", "at": time.time()})
+        out = self.ok("poll", self.s, "--etag", tag)
+        self.assertNotEqual(out["etag"], tag)
+        self.assertEqual(out["doc"]["qa"][0]["status"], "running")
+        self.assertNotIn("qa", self.ok("doc", "--project", "WA")["doc"])
+
 
 class Refs(Base):
     def setUp(self):

@@ -18,6 +18,9 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Organising / AI fill-in runs in flight: job id → the process group of the agent's shell (ProcessGroup). They
     /// stop with the app (applicationWillTerminate); a crash leaves them for the next launch to stop.
     var organisers: [String: pid_t] = [:]
+    /// "Ask about this recording" runs in flight: session path → the turn and its agent's process group (nil while
+    /// the agents are still being checked). One at a time per recording; they stop with the app (stopAskers).
+    var askers: [String: (id: String, group: ProcessGroup?)] = [:]
     /// The quit came from SIGTERM / SIGINT (a script, a logout): no question to ask.
     var quitBySignal = false
     var statusTimer: Timer?
@@ -513,10 +516,22 @@ final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
         emit(["event": "organisers_stopped", "jobs": Array(groups.keys)])
     }
 
+    /// A question still being answered stops with the app, and its turn says so (the page offers Try Again).
+    func stopAskers() {
+        let running = askers
+        askers.removeAll()
+        for (path, a) in running {
+            if let g = a.group { killpg(g.pgid, SIGTERM) }
+            appendLog(URL(fileURLWithPath: path).appendingPathComponent(RecordingAsk.file),
+                      RecordingAsk.line(["id": a.id, "status": "failed", "code": "interrupted", "done_at": Date().timeIntervalSince1970]))
+        }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         App.terminating = true
         guard resident else { return }
         stopOrganisers()
+        stopAskers()
         MainActor.assumeIsolated { ModelDownloads.shared.atQuit() }   // the setup ends now; the next launch carries on
         Hotkeys.shared.unpublish()
         let f = blurtHome.appendingPathComponent("app.json")

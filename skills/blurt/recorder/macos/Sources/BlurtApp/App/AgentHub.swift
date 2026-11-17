@@ -48,7 +48,14 @@ struct AgentDef {
         processingDefault = o["processing"]
         modelsSpec = o["models"] as? [String: Any] ?? [:]
         usageSpec = o["usage"] as? [String: Any] ?? [:]
+        let ask = o["ask"] as? [String: Any]
+        askRun = ask?["run"] as? [String]
+        askAnswer = ask?["answer"] as? String
     }
+    /// agents.json `ask`: the read-only run that answers a question about one recording, and where its answer is in
+    /// the output (RecordingAsk). nil = this agent can't be asked.
+    let askRun: [String]?
+    let askAnswer: String?
     /// false = an app / interactive-only entry (WP2's zcode): never in the background chain or its menus.
     let headless: Bool
     let modelArgs: [String: [String]]
@@ -66,6 +73,13 @@ struct AgentDef {
     func command(bin: String, prompt: String, extra: [String] = [], writable: [String] = AgentHub.writableDirs()) -> String {
         let args = UnattendedRun.args(run, prompt: prompt, scripts: BlurtPaths.scripts.path, writable: writable)
         return ([bin] + args + extra).map(shq).joined(separator: " ")
+    }
+
+    /// The read-only command line for one question about a recording (cwd = the session folder); nil when the agent
+    /// has no `ask` run.
+    func askCommand(bin: String, prompt: String, extra: [String] = []) -> String? {
+        guard let run = askRun else { return nil }
+        return ([bin] + RecordingAsk.args(run, prompt: prompt) + extra).map(shq).joined(separator: " ")
     }
 
     /// Runs in a sandbox that keeps $BLURT_HOME read-only (codex): it needs its own uv cache and no index writes.
@@ -482,11 +496,71 @@ extension App {
             // an Unassigned capture: the run is told the projects, so it can leave a suggestion per item (nothing moves)
             self.candidates(for: dir, project: project) { text in
                 job.step("prepare", .done)
-                self.attempt(dir, queue: queue, skipped: skipped.map { ($0.def, $0.def.name + $0.shortWhy) }, job: job, captures: captures,
-                             project: project, candidates: text)
+                self.transcribeTracks(dir, job: job) {
+                    self.attempt(dir, queue: queue, skipped: skipped.map { ($0.def, $0.def.name + $0.shortWhy) }, job: job, captures: captures,
+                                 project: project, candidates: text)
+                }
             }
         }
         return job.id
+    }
+
+    /// The session's video file (meta.json `video`, recording.mp4 by default).
+    private func recordingFile(_ dir: URL) -> URL {
+        let meta = (try? JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("meta.json")))) as? [String: Any]
+        return dir.appendingPathComponent(meta?["video"] as? String ?? "recording.mp4")
+    }
+
+    /// A video recording, not a batch of snaps and not a voice note: the kind of session that gets every audio track
+    /// transcribed and a summary.
+    private func isVideoRecording(_ dir: URL) -> Bool {
+        ProcessingSpec.kind(forSession: dir, isShots: isShotsSession(dir)) == .recording
+            && FileManager.default.fileExists(atPath: recordingFile(dir).path)
+    }
+
+    /// Both sides of a call in the transcript before the agent reads it. The live transcript has only the
+    /// microphone, and an agent that finds a transcript does not make another (a 66-minute call was organised from
+    /// the user's half alone). `transcribe.py run` adds the system track's lines, and returns at once for a
+    /// recording with one track. It never blocks organising: whatever happens here, the agent goes on with the
+    /// transcript there is. While it runs it is the job's process group, so Stop and Quit stop it.
+    private func transcribeTracks(_ dir: URL, job: JobWriter, then: @escaping () -> Void) {
+        let meta = (try? JSONSerialization.jsonObject(with: Data(contentsOf: dir.appendingPathComponent("meta.json")))) as? [String: Any]
+        let rec = recordingFile(dir)
+        guard isVideoRecording(dir), Scripts.has("transcribe.py"), let uv = ScriptRunner.shared.uvPath else { return then() }
+        let log = dir.appendingPathComponent("agent.log")
+        let cmd = RecordingSummary.transcribeCommand(uv: uv, script: Scripts.url("transcribe.py").path, recording: rec.path)
+        appendLog(log, "── blurt \(nowStamp()) · transcribing every audio track · job \(job.id)\n")
+        job.step("transcribe", .running)
+        var timer: DispatchWorkItem?
+        // the environment the app's own script calls have: a cloud speech service's key comes from the Keychain
+        let started = try? shellGroup(cmd + " >/dev/null", cwd: dir, log: log, append: true, env: ScriptRunner.extraEnvironment()) { [weak self] status in
+            timer?.cancel()
+            guard let self = self else { return }
+            self.organisers[job.id] = nil
+            let text = (try? String(contentsOf: dir.appendingPathComponent("transcript.txt"), encoding: .utf8)) ?? ""
+            let system = text.components(separatedBy: "\n").filter { $0.contains("] (system) ") }.count
+            appendLog(log, "── blurt \(nowStamp()) · transcript: \(text.split(separator: "\n").count) lines, \(system) from the system track"
+                      + (status == 0 ? "" : " (transcribe.py exit \(status))") + "\n")
+            emit(["event": "process_transcribed", "job": job.id, "exit": Int(status), "system_lines": system])
+            // Stop while it ran: no agent starts
+            if JobStore.shared.job(job.id)?.state == .cancelled {
+                self.processing.removeAll { $0 == dir.path }
+                job.finish(.cancelled)
+                Refile.runEnded(dir)
+                self.refreshStatus()
+                return
+            }
+            then()
+        }
+        guard let g = started else {
+            appendLog(log, "── blurt \(nowStamp()) · couldn't start transcribe.py; the agent goes on with the transcript there is\n")
+            return then()
+        }
+        organisers[job.id] = g.pgid
+        let stop = DispatchWorkItem { if ProcessGroup.isOurs(g.pgid, started: g.started) { ProcessGroup.stop(g.pgid) } }
+        timer = stop
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + RecordingSummary.transcribeTimeout(duration: (meta?["duration"] as? NSNumber)?.doubleValue), execute: stop)
     }
 
     /// `projects.py candidates` → its prompt text, when the capture has no project (OrganizerPrompt.wantsCandidates);
@@ -554,7 +628,8 @@ extension App {
         let only = captures.map { "\nOnly these captures (shots.jsonl n): " + $0.map(String.init).joined(separator: ", ") + "." } ?? ""
         let skill = "\nThe blurt skill: \(BlurtPaths.skillDir.path)/SKILL.md" + UnattendedRun.scriptsHint(BlurtPaths.scripts.path)
         return what + only + "\nThis is an unattended background run started by the Blurt app: don't ask questions and don't start the "
-            + "review page. Write items.json and run items.py ingest as SKILL.md says, then summarise in 2–3 sentences." + skill
+            + "review page. Write items.json and run items.py ingest as SKILL.md says, then summarise in 2–3 sentences."
+            + (isVideoRecording(dir) ? RecordingSummary.promptLine : "") + skill
             + AgentHub.codeHint(project.flatMap { ProjectStore.shared.project(id: $0) } ?? ProjectStore.shared.project(containing: dir))
     }
 
@@ -625,9 +700,12 @@ extension App {
                 appendLog(log, "── blurt \(nowStamp()) · \(a.def.name) done" + (status == 0 ? "" : " (exit \(status))") + "\n")
                 for s in ["transcribe", "write", "frames"] { job.step(s, .done) }
                 // a sandboxed run can't append to its job (ingest's event names the items): the batch does
-                if let uids = (try? Data(contentsOf: dir.appendingPathComponent("batch.json")))
-                    .flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] })?["items"] as? [String], !uids.isEmpty {
-                    job.setItems(uids)
+                let batch = (try? Data(contentsOf: dir.appendingPathComponent("batch.json")))
+                    .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                if let uids = batch?["items"] as? [String], !uids.isEmpty { job.setItems(uids) }
+                if isVideoRecording(dir), !RecordingSummary.hasDigest(batch) {
+                    appendLog(log, "── blurt \(nowStamp()) · no summary: the run wrote no digest\n")
+                    emit(["event": "process_no_digest", "job": job.id, "session": dir.path])
                 }
                 job.finish(.done)
                 Scripts.indexUpdate([dir])
@@ -661,6 +739,104 @@ extension App {
             Refile.runEnded(dir)
             self.refreshStatus()
         }
+    }
+
+    // MARK: Ask about this recording
+
+    /// One question about a recording (RecordingAsk), answered by the first usable agent that has an `ask` run: a
+    /// read-only run in the session folder. The turn goes to <session>/qa.jsonl at once as `running`, and again when
+    /// the run ends: `done` with the answer, or `failed` with the reason. The review page shows the turns under the
+    /// Overview (items.py make_doc `qa`); `changed` runs after each write so the page can fetch them. This is not a
+    /// job: nothing is organised, so the notch and the lists say nothing. The run stops with the app, or after
+    /// RecordingAsk.timeout. One question at a time per recording.
+    /// → the turn's id, or why nothing was asked ("empty" | "busy").
+    func ask(_ dir: URL, question: String, changed: @escaping () -> Void = {}) -> (id: String?, why: String?) {
+        guard let q = RecordingAsk.clean(question) else { return (nil, "empty") }
+        let key = dir.standardizedFileURL.path
+        guard askers[key] == nil else { return (nil, "busy") }
+        let file = dir.appendingPathComponent(RecordingAsk.file)
+        let turns = RecordingAsk.turns((try? String(contentsOf: file, encoding: .utf8)) ?? "")
+        // a turn an earlier run of the app left running was cut off
+        for t in turns where t["status"] as? String == "running" {
+            appendLog(file, RecordingAsk.line(["id": t["id"] ?? "", "status": "failed", "code": "interrupted",
+                                               "done_at": Date().timeIntervalSince1970]))
+        }
+        let id = "q" + JobFiles.newID().dropFirst(1)
+        askers[key] = (id, nil)
+        appendLog(file, RecordingAsk.line(["id": id, "question": q, "status": "running", "at": Date().timeIntervalSince1970]))
+        emit(["event": "ask", "session": dir.path, "id": id, "chars": q.count])
+        changed()
+        let end: ([String: Any]) -> Void = { [weak self] fields in
+            guard let self = self, self.askers[key]?.id == id else { return }      // stopped with the app: already said
+            self.askers[key] = nil
+            appendLog(file, RecordingAsk.line(fields.merging(["id": id, "done_at": Date().timeIntervalSince1970]) { mine, _ in mine }))
+            emit(["event": "ask_done", "session": dir.path, "id": id, "status": fields["status"] ?? NSNull(),
+                  "code": fields["code"] ?? NSNull(), "agent": fields["agent"] ?? NSNull()])
+            changed()
+        }
+        let hub = AgentHub.shared
+        hub.reload()
+        let able = hub.order().filter { $0.askRun != nil }
+        guard !able.isEmpty else {
+            end(["status": "failed", "code": "no_agent"])
+            return (id, nil)
+        }
+        hub.check(able, recheck: true) { [weak self] statuses in
+            let queue = statuses.filter { $0.state.usable && $0.bin != nil }
+            guard let self = self, !queue.isEmpty else {
+                return end(["status": "failed", "code": "no_agent", "error": App.noAgentReason(statuses)])
+            }
+            self.askAttempt(dir, id: id, question: q, earlier: RecordingAsk.answered(turns), queue: queue, end: end)
+        }
+        return (id, nil)
+    }
+
+    /// Ask queue[0]; on a failure another agent wouldn't share (login, quota, model), the next one gets the question.
+    private func askAttempt(_ dir: URL, id: String, question: String, earlier: [(question: String, answer: String)],
+                            queue: [AgentStatus], end: @escaping ([String: Any]) -> Void) {
+        let key = dir.standardizedFileURL.path
+        guard askers[key]?.id == id else { return }
+        guard let a = queue.first, let bin = a.bin else { return end(["status": "failed", "code": "no_agent"]) }
+        // the recording's own model and effort (Settings → Agents): the CLI's model at low effort
+        let pa = a.def.processingArgs(env: agentEnvironment(), kind: .recording)
+        let prompt = RecordingAsk.prompt(session: dir.path, question: question, earlier: earlier)
+        guard let cmd = a.def.askCommand(bin: bin, prompt: prompt, extra: pa.args) else {
+            return askAttempt(dir, id: id, question: question, earlier: earlier, queue: Array(queue.dropFirst()), end: end)
+        }
+        let log = dir.appendingPathComponent("qa.log")
+        appendLog(log, "── blurt \(nowStamp()) · ask \(id) with \(a.def.name) (\(bin)) · model \(pa.model ?? "CLI default")"
+                  + (pa.effort.map { ", effort \($0)" } ?? "") + "\n")
+        let started = (try? FileManager.default.attributesOfItem(atPath: log.path)[.size] as? Int) ?? 0
+        var timedOut = false
+        var timer: DispatchWorkItem?
+        let group = try? shellGroup(cmd, cwd: dir, log: log, append: true) { [weak self] status in
+            timer?.cancel()
+            guard let self = self else { return }
+            let tail = (try? Data(contentsOf: log)).map { d in String(decoding: d.dropFirst(min(started, d.count)), as: UTF8.self) } ?? ""
+            if !timedOut, let answer = RecordingAsk.answer(in: tail, format: a.def.askAnswer) {
+                return end(["status": "done", "answer": answer, "agent": a.def.id])
+            }
+            if timedOut { return end(["status": "failed", "code": "timeout", "agent": a.def.id]) }
+            let f = AgentHub.shared.classify(tail)
+            if f?.id == "auth" { AgentHub.shared.invalidate(a.def.id, as: .loggedOut) }
+            let next = Array(queue.dropFirst())
+            if ["auth", "quota", "model"].contains(f?.id ?? ""), !next.isEmpty {
+                return self.askAttempt(dir, id: id, question: question, earlier: earlier, queue: next, end: end)
+            }
+            end(["status": "failed", "code": f?.id ?? "unknown", "agent": a.def.id,
+                 "error": f?.reasonText(a.def) ?? T("app.agent.unfinished", a.def.name, Int(status))])
+        }
+        guard let g = group else {
+            return end(["status": "failed", "code": "unknown", "agent": a.def.id, "error": T("app.agent.couldnt_start", a.def.name)])
+        }
+        askers[key] = (id, g)
+        let stop = DispatchWorkItem {
+            guard ProcessGroup.isOurs(g.pgid, started: g.started) else { return }
+            DispatchQueue.main.sync { timedOut = true }
+            ProcessGroup.stop(g.pgid)
+        }
+        timer = stop
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + RecordingAsk.timeout, execute: stop)
     }
 
     // MARK: AI fill-in: items filed from the user's own notes, enriched in one run

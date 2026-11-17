@@ -1587,6 +1587,93 @@ button.chip:hover {
 .ov .md p {
   margin: 0 0 8px;
 }
+/* a time in the summary or an answer: opens the recording at that moment */
+.ov .md .ts {
+  font: 600 12px/18px var(--mono);
+  color: var(--accent);
+  background: var(--panel-2);
+  padding: 0 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  vertical-align: 1px;
+}
+.ov .md .ts:hover {
+  background: var(--hover);
+}
+/* ask about this recording: the turns, then the field */
+.recask-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.recask-turns:empty {
+  display: none;
+}
+.recask-q {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.recask-wait,
+.recask-err {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--mute);
+  font-size: 14px;
+}
+.recask-err span {
+  color: var(--ink-2);
+}
+.recask-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+.recask-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--ctl-h);
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  box-shadow: 0 0 0 1px var(--line);
+}
+.recask-input:focus {
+  outline: 3px solid var(--focus-soft);
+}
+.recask-input::placeholder {
+  color: var(--mute);
+}
+/* the recording at the moment asked for: a bar docked at the bottom of the Overview while you read on. It is the
+   last thing in the scroller, so everything above can be scrolled clear of it. The offsets undo .list's padding
+   (24px at the sides, 60px at the bottom: a sticky box stops at the padding, not at the scroller's edge) */
+.ov-moment {
+  position: sticky;
+  bottom: -60px;
+  z-index: 2;
+  margin: 18px -24px -60px;
+  padding: 10px 24px;
+  display: flex;
+  justify-content: center;
+  background: var(--bg);
+  box-shadow: 0 -1px 0 var(--line);
+}
+.ov-moment video {
+  display: block;
+  height: min(34vh, 260px);
+  max-width: 100%;
+  border-radius: var(--r-sm);
+  background: #000;
+}
+.ov-moment .btn {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+}
 .ov-list {
   display: flex;
   flex-direction: column;

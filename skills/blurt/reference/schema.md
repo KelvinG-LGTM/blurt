@@ -13,7 +13,7 @@ from then on every change goes through `items.py`.
   "source_video": "recording.mp4",       // relative to the session dir; none for screenshot / voice sessions
   "language": "zh",                       // language the user spoke: drives the item files' section headings
   "title": "官网改版的一些想法",             // one line for the whole recording
-  "digest": "## 总览\n- …",                // optional markdown overview — write one for exploratory / idea sessions
+  "digest": "## Summary\n…",              // the recording's summary in markdown (SKILL.md §3): every recording has one
   "processing": true,                     // you're still adding frames etc.; `items.py done` ends it
   "items": [
     {

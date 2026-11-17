@@ -829,11 +829,21 @@ def ingest(session: Path, mode: str = "ingest") -> dict:
         dest = session / ("items.v2.json" if mode == "migrate" else "items.ingested.json")
         os.replace(src, dest)
         save_batch(session, b)
+        no_digest = mode == "ingest" and _source_type(session, meta) == "recording" \
+            and not str(b.get("digest") or "").strip()
     job = os.environ.get("BLURT_JOB") or os.environ.get("BLURT_RUN_ID")
     if mode == "ingest" and job:
         append_job_event(job, {"event": "step", "step": {"id": "write", "state": "done"},
                                "items": [r["uid"] for r in results]})
-    return {"ok": True, "items": results, "inbox": sum(1 for r in results if r["project"] == st.INBOX)}
+    out = {"ok": True, "items": results, "inbox": sum(1 for r in results if r["project"] == st.INBOX)}
+    if no_digest:  # every recording has a summary (SKILL.md §3): the page's Overview, and what the user reads first
+        out["warning"] = NO_DIGEST.format(session=session)
+    return out
+
+
+NO_DIGEST = ("this recording has no summary yet. Write its digest now (SKILL.md §3: Summary, Key points and decisions, "
+             "Action items, Open questions): items.py patch {session} . --set 'digest=\"## Summary\\n…\"' "
+             "(a JSON string: \\n is a line break)")
 
 
 def add(session: Path | None, project: str | None, fields: dict, after: str | None) -> dict:
@@ -1255,7 +1265,8 @@ def make_doc(scope: dict, kinds=(), states=None, include: str | None = None) -> 
         doc = {"schema": st.SCHEMA, "scope": {"session": str(session)}, "title": b.get("title"),
                "digest": b.get("digest"), "language": b.get("language"), "processing": bool(b.get("processing")),
                "reviewed": bool(b.get("reviewed")), "agent_at": b.get("agent_at"), "source_video": vpath,
-               "_video": bool(vpath) and Path(vpath).is_file(), "project": b.get("project")}
+               "_video": bool(vpath) and Path(vpath).is_file(), "project": b.get("project"),
+               "qa": read_qa(session)}
     else:
         pid = scope.get("project")
         meta = names.get(pid) or {}
@@ -1272,6 +1283,40 @@ def make_doc(scope: dict, kinds=(), states=None, include: str | None = None) -> 
         doc["_unreadable"] = [u for u in unreadable if include in (u["uid"], u["id"], *u["aliases"])]
     doc["projects"] = plist
     return doc
+
+
+QA_FILE = "qa.jsonl"
+QA_STALE_S = 360  # the app stops an ask after 300 s: a turn still "running" after this was cut off (the app quit)
+QA_FIELDS = ("id", "question", "status", "answer", "error", "code", "agent", "at", "done_at")
+
+
+def read_qa(session: Path, now: float | None = None) -> list:
+    """"Ask about this recording": the turns in <session>/qa.jsonl, which the app writes (one JSON object a line; a
+    turn's later line replaces its earlier one: running → done | failed). Oldest first. A turn left running by an
+    app that quit reads as failed (code "interrupted"), so the page never waits for an answer that won't come."""
+    import time  # noqa: PLC0415
+    try:
+        lines = (session / QA_FILE).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    turns: dict = {}
+    for line in lines:
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(o, dict) and isinstance(o.get("id"), str):
+            turns.setdefault(o["id"], {}).update(o)
+    now = time.time() if now is None else now
+    out = []
+    for t in turns.values():
+        if not isinstance(t.get("question"), str) or t.get("status") not in ("running", "done", "failed"):
+            continue
+        at = t.get("at")
+        if t["status"] == "running" and not (isinstance(at, (int, float)) and now - at < QA_STALE_S):
+            t = {**t, "status": "failed", "code": "interrupted"}
+        out.append({k: t[k] for k in QA_FIELDS if t.get(k) is not None})
+    return out
 
 
 def _agent_names() -> dict:

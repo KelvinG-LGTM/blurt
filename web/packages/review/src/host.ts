@@ -103,6 +103,28 @@ export interface ProjectRef {
   key: string;
   path?: string;
 }
+/** One question about the recording and its answer ("Ask about this recording", under the Overview). The app
+    writes the turns (<session>/qa.jsonl); the doc carries them, oldest first. */
+export interface QATurn {
+  id: string;
+  question: string;
+  status: "running" | "done" | "failed";
+  /** markdown; times as [mm:ss] */
+  answer?: string;
+  /** why it failed: "timeout" | "interrupted" | "no_agent" | an agent failure (auth, quota, model) | "unknown" */
+  code?: string;
+  /** the host's own sentence for a failure the code alone doesn't explain */
+  error?: string;
+  agent?: string;
+  at?: number;
+  done_at?: number;
+}
+export interface AskResult {
+  /** the turn that was started; null when nothing was (why: "empty" | "busy") */
+  id: string | null;
+  why?: string | null;
+}
+
 export interface ReviewDoc {
   schema?: number;
   /** v3 */
@@ -118,6 +140,8 @@ export interface ReviewDoc {
   agent_at?: number | string;
   /** false when source_video is missing on disk (shots sessions) */
   _video?: boolean;
+  /** a session's doc: the questions asked about the recording */
+  qa?: QATurn[];
   items: Item[];
   _removed?: Record<string, string>;
   /** v3: every project an item can move to (the inbox has id "inbox") */
@@ -218,6 +242,9 @@ export interface BlurtHost {
   undone?(uid: string): void;
   /** Esc with nothing left to cancel: the focus goes back to the host's list (its selection kept) */
   focusList?(): void;
+  /** "Ask about this recording": the host has an agent answer one question from the recording's own files, read-only.
+      It resolves once the turn is recorded (the doc's `qa` has it, running); the answer arrives with a later poll. */
+  ask?(question: string): Promise<AskResult>;
 
   // browser only: hand-written items.json without ids is saved whole, as review.py has always accepted
   saveDoc?(doc: ReviewDoc, confirm?: boolean): Promise<void>;

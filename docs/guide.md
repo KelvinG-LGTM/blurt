@@ -66,6 +66,15 @@ recordings). The app has no button to organize it later; ask the blurt skill in 
 Use a recording for flows, animations and timing;
 use a snap or a voice note for everything that fits in one screen or one sentence.
 
+**The summary, and asking about a recording.** Every recording is organized with a summary. *Open* shows it first, on
+the recording's **Overview**: what it was, the key points and decisions, the action items and the open questions. For
+a call recorded with *Record system audio* on, Blurt transcribes the other side too before organizing starts, so the
+summary and the items cover both sides. Under the summary, **Ask about this recording** takes a question ("What did
+we decide about the release date?"). Claude Code reads that recording's transcript and summary, changes nothing, and
+the answer shows there in about half a minute, with the times it came from. Ask one question at a time; the earlier
+ones stay with the recording. Click a time (`25:51`) in the summary or in an answer to play the recording from that
+moment, while its video is still on your Mac. Each question is a run of your agent and uses its tokens.
+
 **Who organizes.** In the background, the first agent CLI in *Settings → Agents* that is installed and signed in:
 Claude Code, Codex, Kimi Code, OpenCode, Gemini CLI or Grok. Any agent that has the Blurt skill can also do it from
 its chat, WorkBuddy, Cursor and CodeBuddy included: say "process my Blurt recordings" and it organizes the recordings
@@ -809,6 +818,8 @@ runs in (Terminal, iTerm…), so that app needs Screen Recording and a restart a
 
 点完成后，刘海会说「正在整理到 Atlas Web」；口喷鸡在这台 Mac 上整理过几段录屏之后，还会说通常要多久（「通常约 4 分钟」；在那之前不瞎猜），旁边的「更改」可以换项目。鼠标移到刘海上能看到进度和剩余时间。整理好后，刘海会说「已整理到 Atlas Web · 5 条新的」，点「打开」。只想留下视频、不整理（比如要把视频发给别人）：在刘海的 ··· 菜单（或菜单栏菜单）里选「只保存视频」代替「完成」，视频会保存并在访达中显示。口喷鸡不会自己删它（「自动删除视频」只处理已经整理过的录屏）。App 里暂时没有「之后再整理」的按钮；需要的话，让你的 agent 里的 blurt 技能处理这段录屏。
 操作流程、动画、时序问题用录屏；一个画面、一句话能说清的，用截图或语音备注。
+
+**总结，和就这段录屏提问。** 每段录屏整理完都有一份总结。点「打开」先看到它，在这段录屏的「**总览**」里：这段录屏是什么、要点和决定、待办、还没定的问题。开着「录制系统声音」录的通话，口喷鸡会在整理开始前把对方说的话也转成文字，所以总结和事项包含双方说的。总结下面是「**问问这段录屏**」：输入一个问题（「发布日期最后怎么定的？」），Claude Code 只读这段录屏的文字稿和总结，什么都不改，大约半分钟后答案显示在这里，并标出依据在录屏的哪个时间。一次问一个问题；问过的会和录屏一起留着。视频还在这台 Mac 上时，点总结或答案里的时间（`25:51`）就从那一刻播放录屏。每个问题都是你的 Agent 的一次运行，会用它的额度。
 
 **谁来整理。** 后台整理用「设置 → Agent」里第一个已安装并登录的命令行 Agent：Claude Code、Codex、Kimi Code、OpenCode、
 Gemini CLI 或 Grok。装了口喷鸡 skill 的 Agent 也能在对话里整理，WorkBuddy、Cursor、CodeBuddy 都行：跟它说「处理我录的视频」，
