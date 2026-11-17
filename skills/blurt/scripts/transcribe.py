@@ -8,8 +8,11 @@ video, so any backend (even ones without timestamps) works.
 
   transcribe.py run    <video|audio> [--out DIR]     transcribe; writes transcript.json + transcript.txt
                                                      instant when live.py already transcribed the recording
-                                                     while it was made (<session>/live/); --force redoes it
-  transcribe.py run    <session dir>                 a shots session (snap mode): transcribe each voice note
+                                                     while it was made (<session>/live/); --force redoes it.
+                                                     A segment that may have missed one of the user's words
+                                                     (dictation_vocab.py) is heard a second time with those words
+                                                     as hints → "vocabulary" in transcript.json; --no-vocab: not
+  transcribe.py run    <session dir>                a shots session (snap mode): transcribe each voice note
                                                      shots/NNN.wav into its shots.jsonl record ("said")
   transcribe.py note   <wav> [--language auto] [--dictation] [--vocab] [--no-server] [--no-download]
                                                      one voice note, fast path → {"ok","text","language","ms","model"}
@@ -3105,6 +3108,8 @@ def cmd_run(a):
         t0 = time.time()
         backend = make_backend(name, a, "batch")
         workers = 1 if name in LOCAL else a.concurrency
+        terms = recording_words(backend, a)
+        again = changed = 0
         # Blurt's native recorder writes the mic as track 0 and, with --system-audio, what the Mac played as track 1.
         # Transcribing them apart labels who spoke: the user ("mic") or the call / demo ("system").
         duration = speech = blank = 0.0
@@ -3112,18 +3117,31 @@ def cmd_run(a):
         for track in range(min(n_tracks, 2)):
             label = ("mic", "system")[track] if n_tracks > 1 else None
             if track == 0 and data is not None:  # live.py already did the mic; only the system track is left
-                results += [(s["start"], s["end"], s["text"], label) for s in data["segments"]]
+                r = [(s["start"], s["end"], s["text"], label) for s in data["segments"]]
                 duration, speech = float(data["duration"]), float(data["speech_seconds"])
                 print("mic track: reusing the live transcript", file=sys.stderr, flush=True)
+                # live.py hears no words: its segments get the same second hearing (the track is only read for one)
+                if terms:
+                    r, n, m = hear_again(backend, lambda: load_audio(src, 0), r, terms)
+                    again, changed = again + n, changed + m
+                results += r
                 continue
             samples = load_audio(src, track)
             duration = max(duration, len(samples) / SR)
             r, sp, bl = transcribe_track(samples, backend, name, workers, label)
+            if terms:
+                r, n, m = hear_again(backend, samples, r, terms)
+                again, changed = again + n, changed + m
             results += r
             if track == 0:
                 speech, blank = sp, bl
 
     data = build_transcript(src.name, name, backend, a, duration, speech, blank, results, time.time() - t0)
+    if terms:
+        # the user's words in this transcript: how many segments were heard a second time, how many of them changed
+        data["vocabulary"] = {"words": len(terms), "heard_again": again, "changed": changed}
+        print(f"vocabulary: {again} segments heard again with the words they may have missed, {changed} changed",
+              file=sys.stderr, flush=True)
     if data.get("warning"):
         print("warning: " + data["warning"], file=sys.stderr, flush=True)
     print_summary(data, write_transcript(out, data))
@@ -3680,6 +3698,57 @@ def bias(backend, vocab, prior: str | None = None, hint: str | None = None, app:
     if name and not any(t["term"] == name for t in use):
         use = [{"term": name, "sounds_like": [], "source": "app", "hits": 0}] + use[:max(0, limit - 1)]
     return backend.set_vocab(use)
+
+
+# --- a recording's words (docs/design/dictation.md §Custom words: recordings)
+def recording_words(backend, a) -> list[dict]:
+    """The user's words (dictation's vocabulary) for a recording's transcript, or [] when there is nothing to do with
+    them: the caller asked for none (--no-vocab) or gave a glossary of its own (--prompt: that is what the model
+    hears), the backend takes no words (SenseVoice), or its words are built into the recognizer (FunAsrOnnx,
+    `app_hint` False: a new list is a new recognizer, ~3 s each time)."""
+    if getattr(a, "no_vocab", False) or getattr(a, "prompt", None):
+        return []
+    if not hasattr(backend, "set_vocab") or not getattr(backend, "app_hint", True):
+        return []
+    return dictation_vocab.load()
+
+
+def hear_again(backend, samples, results: list, terms: list[dict]) -> tuple[list, int, int]:
+    """A recording's second hearing. A dictation gives the model the whole word list with every piece; a recording
+    cannot: measured on a 66-minute call (Qwen3-ASR 1.7B, 61 words), the list with every chunk cost 60 % more time
+    and wrote one listed name where another was said ("Haneel" came back "Midhun"). So the chunks are first heard
+    without words, and only a segment whose text may have missed a word (dictation_vocab.misheard: a sounds-like, or
+    a name the model wrote that is spelled like a listed one) is heard once more, with only those words as hints. The
+    second answer is the segment only when it has one of those words where the first had not: the model still writes
+    every word, and a segment it hears the same way twice stays as it was.
+    results: [(start, end, text, label[, language])] of `samples` (the track, or a callable that loads it when the
+    first segment needs it) → (the results, segments heard again, changed)."""
+    lower = dictation_vocab.lowercase_words(row[2] for row in results)
+    out, again, changed = [], 0, 0
+    for row in results:
+        s, e, text, label = row[:4]
+        cand = dictation_vocab.misheard(terms, text, lower) if e - s >= 0.2 else []
+        if not cand:
+            out.append(row)
+            continue
+        if callable(samples):
+            samples = samples()
+        again += 1
+        second = []
+        try:
+            if bias(backend, cand):
+                second = decode_slice(backend, samples[int(s * SR):int(e * SR)], s, e)
+        except Fail as err:     # a cloud request that failed: the first hearing stands
+            print(f"second hearing skipped: {err}", file=sys.stderr, flush=True)
+        finally:
+            backend.set_vocab([])
+        new = " ".join(t for _, _, t, *_ in second)
+        if any(dictation_vocab.written(t["term"], new) > dictation_vocab.written(t["term"], text) for t in cand):
+            out.extend((s_, e_, t, label, *lg) for s_, e_, t, *lg in second)
+            changed += 1
+        else:
+            out.append(row)
+    return out, again, changed
 
 
 # --- a take streamed while it is said (serve "stream"; docs/design/dictation.md §Cloud recognition)
@@ -4690,6 +4759,8 @@ def main():
     r.add_argument("--out", help="output dir (default: next to input)")
     model_opts(r)
     r.add_argument("--prompt", help="glossary / context: product & module names, jargon (Whisper / Qwen3 / API backends)")
+    r.add_argument("--no-vocab", dest="no_vocab", action="store_true",
+                   help="a recording: no second hearing with the dictation words (on by default, off with --prompt)")
     r.add_argument("--concurrency", type=int, default=4)
     r.add_argument("--threads", type=int)
     r.add_argument("--force", action="store_true", help="transcribe again even if live.py already did")

@@ -1770,6 +1770,49 @@ polish.py; `dictation_corrections.py` gone), `tests/test_dictation_stitch.py::te
 - `terms_applied` in the history: the words polish wrote, plus listed words in the text when the speech model was
   told about them.
 
+### Recordings: a second hearing (2026-11-17)
+
+A recording's transcript (`transcribe.py run`) had none of the words: `bias()` was called for a voice note and a
+streamed take only, so a call's transcript wrote "Haniel", "Mithun", "Bijou" and "DB to you" for words the user had
+listed. Measured on a real 66-minute call (two tracks, Qwen3-ASR 1.7B MLX, 61 active words, the user's languages en +
+zh) and on a 15-minute cut of it (126 chunks):
+
+- **The whole list with every chunk** (what a dictation does) is not for recordings. It fixed the most names
+  (Haneel 0 → 3, Midhun 0 → 2, Deepa 2 → 7, Biju 3 → 7 on the cut), but it rewrote 81 of 126 chunks, wrote one listed
+  name where another was said ("Uh, Haniel, could you do one thing?" came back "Ah, Midhun, …"; without Midhun in the
+  list the same chunk came back "Haneel", and macOS's recogniser heard "Anil"), and took 60 % longer (50 s → 80 s):
+  the 61 words are 202 prompt tokens, and with them the language tag needs its own prefill (§Code-switching), so
+  each chunk prefills twice (3.2 s → 11.3 s of prefill over 40 chunks). Two chunks of the cut also came back as the
+  word list (`context_dump` caught both).
+- **What ships: a second hearing** (`transcribe.hear_again`). Every chunk is first heard without words. A segment
+  whose text may have missed a word is heard once more with only those words as hints, and the second answer is the
+  segment only when it has one of those words where the first had not. So the model still writes every word, a
+  segment it hears the same way twice stays byte for byte, and the only words that can appear are ones the first
+  hearing nearly wrote.
+- **Which segments** (`dictation_vocab.misheard`): one of the word's sounds-likes is in the text (whole words), or
+  words in a row are spelled like the word (`similar`) and the speech model wrote one of them as a name — a capital
+  inside a sentence, or at the start of one when the transcript never has that word in lower case. The model's own
+  capitals are the signal; no lexicon (§Rules vs model). `relevant()` is too wide for this: it lists a word for
+  anything spelled like it (needs / Anees, deep / Deepa), 46–54 % of a meeting's speech. A listed word written right
+  is never a near-miss of another one (Haneel / Anees).
+- The mic track's text usually comes from `live.py` (no words there) and is reused: its segments get the same second
+  hearing, read from the recording's mic track only when one of them needs it. A recording with one track whose
+  transcript live.py already made returns at once as before (no model is loaded, so no second hearing).
+- Off with `--no-vocab`, and with `--prompt` (the caller's glossary is what the model hears). Not for a backend that
+  takes no words (SenseVoice) or builds them into the recognizer (FunAsrOnnx). `vocabulary` in transcript.json:
+  `{"words", "heard_again", "changed"}`.
+- A lower-case mishearing ("weekluster" for vCluster) is found only through a sounds-like: what the model wrote
+  instead belongs in the word's `sounds_like`.
+- **Measured** (the same call; before = the transcript the app made, which the run without words reproduces segment
+  for segment). The cut, both tracks heard here: 12 of 126 segments heard again, 5 changed, 121 identical; 52.6 s →
+  58.4 / 59.4 s. The whole call the way the app runs it (mic from live.py, the system track here): 53 of 491 heard
+  again, 23 changed, 468 identical; 154.1 s → 183.8 s (+19 %). Listed spelling before → after: Haneel 0 → 3 (no
+  "Haniel" / "Hanil" left), Midhun 0 → 2, Deepa 2 → 5, Biju 3 → 6, Db2 0 → 11, Db2u 0 → 3, Big SQL 1 → 3. Read one
+  by one, none of the 23 has a listed word that the first hearing did not nearly write; one came back with a
+  Chinese interjection ("Adiba." → 「啊，Deepa。」). Not fixed: "DBT operator" (4 segments heard again with Db2u, the
+  model wrote DBT again), 14 of 24 "DB two", "Madam" for Midhun, and vCluster (0 of 3: no sounds-like yet). Two runs
+  give the same transcript.
+
 ## Names inside Chinese speech (code-switching)
 
 What the user saw in WeChat (no readable field: the context was the window title only). They said, in Chinese, that

@@ -101,6 +101,11 @@ it to the scripts it starts as the variables below, over the shell's). From a te
 ## Quality tips
 
 - Pass `--prompt` with product vocabulary (Whisper and API backends).
+- Without `--prompt`, a recording's segment that may have missed one of the user's dictation words (a sounds-like of
+  the word, or a name spelled like it) is heard a second time with those words as hints; `vocabulary` in
+  transcript.json says how many were heard again and how many changed. `--no-vocab` turns it off. A name the model
+  keeps missing: what it wrote instead belongs in the word's `sounds_like`
+  (`$BLURT_HOME/dictation/vocabulary.json`, docs/design/dictation.md §Custom words).
 - Fix the remaining errors while writing items, using the repo's vocabulary and what's on screen: you are the
   post-processor.
 - A `warning` in transcript.json means SenseVoice heard a language it doesn't speak. Re-run with

@@ -206,6 +206,71 @@ def relevant(terms: list[dict], raw: str = "", context: str = "") -> list[dict]:
     return out
 
 
+MISHEARD_MIN = 4         # letters: a shorter word or term is spelled like too many others (sure / SRE)
+_SENTENCE_END = ".?!\u3002\uff1f\uff01\u2026"     # also the full-width full stop, question and exclamation marks, the ellipsis
+
+
+def written(term: str, text: str) -> int:
+    """How many times `text` has `term` exactly as listed (its case too), not inside a longer Latin word."""
+    n, i = 0, (text or "").find(term)
+    while term and i >= 0:
+        a, b = text[i - 1:i], text[i + len(term):i + len(term) + 1]
+        if not any(c.isascii() and c.isalnum() for c in (a, b) if c):
+            n += 1
+        i = text.find(term, i + len(term))
+    return n
+
+
+def lowercase_words(texts) -> set[str]:
+    """The words these texts have in lower case: what the speech model wrote as ordinary words (misheard's `lower`)."""
+    return {w for t in texts for w in _WORD.findall(t or "") if w[0].islower()}
+
+
+def misheard(terms: list[dict], raw: str, lower=frozenset()) -> list[dict]:
+    """The terms `raw` may have written wrong: what a recording's second hearing is asked about (transcribe.py
+    hear_again). Narrower than relevant(), which lists a term for any word spelled like it (sure / SRE, needs / Anees:
+    half of a meeting's segments):
+    - One of the term's sounds-likes is in it (what a speech model wrote for the term before), as whole words.
+    - As many words in a row as the term has are spelled like it (similar) without being it or another listed term
+      ("Haneel" is no near-miss of "Anees"), and the speech model wrote one of them as a name: with a capital inside a
+      sentence ("Uh, Haniel, could you"), or at the start of one when the transcript never has that word in lower case
+      (`lower`: "Mithun, can you" but not "Sure, …"). The model's own capitals say what it took for a name — no word
+      list does (docs/design/dictation.md §Rules vs model). Both at least MISHEARD_MIN letters.
+    - Chinese characters that sound like the term (sounds_in)."""
+    if not raw or not raw.strip():
+        return []
+    low = unicodedata.normalize("NFKC", raw).lower()
+    words = [(m.group(0), m.start()) for m in _WORD.finditer(raw)]
+
+    def name(i: int) -> bool:
+        w, at = words[i]
+        if not w[0].isupper():
+            return False
+        before = raw[:at].rstrip()
+        return bool(before and before[-1] not in _SENTENCE_END) or w.lower() not in lower
+
+    listed = {_key(t["term"]) for t in terms}
+    out = []
+    for t in terms:
+        term = t["term"]
+        if any(written(sl.lower(), low) for sl in t["sounds_like"]):
+            out.append(t)
+            continue
+        if _CJK_RE.search(term):
+            if sounds_in(term, raw):
+                out.append(t)
+            continue
+        k, n = _key(term), max(1, len(_WORD.findall(term)))
+        if len(k) < MISHEARD_MIN:
+            continue
+        for i in range(len(words) - n + 1):
+            g = _key("".join(w for w, _ in words[i:i + n]))
+            if g not in listed and len(g) >= MISHEARD_MIN and any(name(j) for j in range(i, i + n)) and similar(g, k):
+                out.append(t)
+                break
+    return out
+
+
 def whisper_prompt(terms: list[dict]) -> str:
     """mlx-whisper initial_prompt: a plain comma list (asr eval: no insertions, no loops)."""
     return ", ".join(t["term"] for t in terms[:MAX_TERMS])
