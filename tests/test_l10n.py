@@ -289,5 +289,31 @@ class Tables(unittest.TestCase):
         self.assertEqual(sorted(info["CFBundleLocalizations"]), ["en", "zh-Hans"])
 
 
+def duplicate_keys(text: str) -> list:
+    """The keys a JSON object has more than once, at any depth."""
+    import json
+    found: set = set()
+
+    def pairs(items):
+        names = [k for k, _ in items]
+        found.update(k for k in names if names.count(k) > 1)
+        return dict(items)
+    json.loads(text, object_pairs_hook=pairs)
+    return sorted(found)
+
+
+class WebCatalogs(unittest.TestCase):
+    """The web pages' string catalogs (web/**/locales/*.json)."""
+
+    def test_no_key_is_there_twice(self):
+        # A key written twice parses without an error and the later value wins: a new string under a name that
+        # was taken replaces the old one wherever the page shows it ("ask.title", the item's "Needs your input").
+        self.assertEqual(duplicate_keys('{"a": 1, "b": {"c": 1, "c": 2}, "a": 3}'), ["a", "c"])
+        files = [f for f in sorted((ROOT / "web").glob("**/locales/*.json")) if "node_modules" not in f.parts]
+        self.assertTrue(files)
+        for f in files:
+            self.assertEqual(duplicate_keys(f.read_text(encoding="utf-8")), [], str(f.relative_to(ROOT)))
+
+
 if __name__ == "__main__":
     unittest.main()

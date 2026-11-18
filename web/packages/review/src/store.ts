@@ -278,7 +278,7 @@ export class ReviewStore {
     }
     if (!id) {
       this.askPending = null;
-      this.showToast(this.t("ask.error.unknown"), false, "x");
+      this.showToast(this.t("recask.error.unknown"), false, "x");
       this.emit();
       return false;
     }

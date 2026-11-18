@@ -262,7 +262,7 @@ type OnTime = (t: number, from: HTMLElement) => void;
     button that opens the recording at that moment. */
 function Md({ src, onTime }: { src: string; onTime?: OnTime }) {
   const s = useStore();
-  const html = onTime ? mdTimes(mdLite(src), s.t("ask.time", { t: "{t}" })) : mdLite(src);
+  const html = onTime ? mdTimes(mdLite(src), s.t("recask.time", { t: "{t}" })) : mdLite(src);
   // one object while the text is the same: React sets innerHTML again for every new object, which would replace
   // the time that was just clicked (and drop a selection or the focus) on each render
   const inner = useMemo(() => ({ __html: html }), [html]);
@@ -317,15 +317,15 @@ function Ask({ onTime }: { onTime?: OnTime }) {
     setQ("");
   };
   const why = (t: QATurn) =>
-    t.code === "timeout" || t.code === "interrupted" ? s.t("ask.error." + t.code) : t.error || s.t(t.code === "no_agent" ? "ask.error.no_agent" : "ask.error.unknown");
+    t.code === "timeout" || t.code === "interrupted" ? s.t("recask.error." + t.code) : t.error || s.t(t.code === "no_agent" ? "recask.error.no_agent" : "recask.error.unknown");
   const wait = (
     <p className="recask-wait" role="status">
-      <Thinking /> {s.t("ask.thinking")}
+      <Thinking /> {s.t("recask.thinking")}
     </p>
   );
   return (
     <section className="recask" id="recAsk">
-      <h3>{s.t("ask.title")}</h3>
+      <h3>{s.t("recask.title")}</h3>
       <div className="recask-turns" aria-live="polite">
         {turns.map((t, n) => (
           <div key={t.id} className="recask-turn" data-status={t.status}>
@@ -339,7 +339,7 @@ function Ask({ onTime }: { onTime?: OnTime }) {
                 <span>{why(t)}</span>
                 {s.canAsk && n === turns.length - 1 && (
                   <button className="btn sm" disabled={s.asking} onClick={() => send(t.question)}>
-                    {s.t("ask.retry")}
+                    {s.t("recask.retry")}
                   </button>
                 )}
               </p>
@@ -360,8 +360,8 @@ function Ask({ onTime }: { onTime?: OnTime }) {
             className="recask-input"
             value={q}
             maxLength={2000}
-            placeholder={s.t("ask.placeholder")}
-            aria-label={s.t("ask.title")}
+            placeholder={s.t("recask.placeholder")}
+            aria-label={s.t("recask.title")}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
               if (!isEnter(e)) return; // an input method's Enter commits a candidate, it never asks
@@ -370,7 +370,7 @@ function Ask({ onTime }: { onTime?: OnTime }) {
             }}
           />
           <button id="askSend" className="btn" disabled={!q.trim() || s.asking} onClick={() => send(q)}>
-            {s.t("ask.send")}
+            {s.t("recask.send")}
           </button>
         </div>
       )}
