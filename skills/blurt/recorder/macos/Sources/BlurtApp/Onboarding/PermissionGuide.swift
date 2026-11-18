@@ -227,6 +227,16 @@ final class PermissionGuide: ObservableObject {
     /// The pane again (the user closed System Settings, or it went behind).
     func reopenPane() { if let k = current { SystemAccess.openPane(k) } }
 
+    /// A checked System Settings row can belong to an older version even when preflight says no: the step offers the
+    /// re-add instructions by hand once the switch has had time to work (HelperPanel, with suggestRestart); no
+    /// permission is changed here.
+    func readdScreen() {
+        guard running, current == .screen, !stepDone else { return }
+        reauthorize = true
+        satisfiedNow = satisfiedSet
+        go(.screen)
+    }
+
     /// Screen Recording: relaunch, and carry on with the rest of the walk afterwards.
     func restartForScreen() {
         let rest = Array(steps.drop { $0 != current }.dropFirst())
@@ -307,13 +317,16 @@ final class PermissionGuide: ObservableObject {
         let flow = PermissionFlowKind(rawValue: r["flow"] as? String ?? "") ?? .all
         let src = Source(rawValue: r["source"] as? String ?? "") ?? .privacy
         emit(["event": "perm_guide", "op": "resume", "steps": kinds.map(\.rawValue), "source": src.rawValue])
-        if kinds.isEmpty {
-            // Screen Recording was the walk's last step: the done line, back where the walk started
-            self.flow = flow
-            self.source = src
-            return finish(already: true)
-        }
-        start(flow, only: kinds, source: src)
+        guard kinds.isEmpty else { return start(flow, only: kinds, source: src) }
+        // Screen Recording was the walk's last step. On now: a walk of just that one ends saying so (not "Done for
+        // now" about the rest of the flow). Still off: the done line, back where the walk started, as before: Restart
+        // in Settings → Privacy lands here too, for someone who said no or hasn't flipped the switch yet, and they
+        // aren't told to remove a row that may not be there. A grant macOS lists but ScreenCaptureKit refuses is
+        // ScreenHelp's to find (ScreenGrant.stale); the step's "Already on…" link reaches re-add by hand.
+        if SystemAccess.granted(.screen) { return start(flow, only: [.screen], source: src) }
+        self.flow = flow
+        self.source = src
+        finish(already: true)
     }
 
     // MARK: words
